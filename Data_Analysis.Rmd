@@ -1,0 +1,235 @@
+---
+title: "Preliminary Report"
+author:
+- "Colin Pi"
+- "Narun Raman"
+- "Ruby Vozza"
+- "Ian Doherty"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, include=FALSE}
+library(dplyr)
+library(tidyr)
+library(stargazer)
+library(stringr)
+library(ggplot2)
+
+rename_by_pos = function(df, index, new_name){ 
+    colnames(df)[index] = new_name 
+    df 
+}
+
+worldBank <- read.csv("worldBank.csv") %>% select(-X) %>% filter(Country.Name != "Ireland") %>% rename_by_pos(5:54,1968:2017)
+
+narrow <- function(i){
+  outcome <- gather(worldBank %>% filter(Series.Name == worldBank$Series.Name[i]), key = Year, value = UQ(worldBank$Series.Name[i]), 5:54) %>% select(6)
+  return(outcome)
+}
+
+worldBankNarrow <- gather(worldBank %>% filter(Series.Name == worldBank$Series.Name[1]), key = Year, value = UQ(worldBank$Series.Name[1]), 5:54) %>% select(-c(2:4)) %>% bind_cols(lapply(2:64, narrow) %>% bind_cols())
+
+worldBankNarrow[, 2:66] <- sapply(worldBankNarrow[, 2:66], as.numeric)
+
+worldBankNarrow <- left_join(worldBankNarrow, read.csv("control.csv")) %>% select(-X, -school, -Region, -GINI)
+
+worldBankNarrow <- worldBankNarrow %>% rename_by_pos(c(8:9,46,62,67:70), c("GROWTH","GDP","EDU","LITERACY","INCOME","TRADE", "GOV", "VOC"))
+
+worldBankNarrowFinal <- worldBankNarrow %>% select(1:2,8:9,46,62,67:71)
+```
+
+## Descriptive statistics and Normality Assumptions
+
+### Independent Variables
+
+```{r, echo=FALSE, warning=FALSE}
+stargazer(worldBankNarrowFinal[5:11], header = FALSE, out = "Independent.htm", median = TRUE, iqr=TRUE)
+
+normality_func <- function(a){
+  outcome <- worldBankNarrowFinal %>% 
+    ggplot(aes(x = worldBankNarrowFinal[,a], y = ..density..)) +
+    geom_histogram(bins = 30) + 
+    geom_density()+
+    labs(x = colnames(worldBankNarrowFinal)[a], y = "Density", title = "Distribution of the Variable")
+  return(outcome)
+}
+
+##Normality Test for EDU variable
+
+normality_func(5)
+normality_func(6)
+
+qqnorm(worldBankNarrowFinal$EDU)
+qqline(worldBankNarrowFinal$EDU)
+
+qqnorm(worldBankNarrowFinal$LITERACY)
+qqline(worldBankNarrowFinal$LITERACY)
+```
+
+### Dependent Variables
+
+```{r, echo=FALSE, results='asis'}
+stargazer(worldBankNarrowFinal[3:4], header = FALSE, out = "Dependent.htm", median = TRUE, iqr=TRUE)
+
+normality_func(3)
+qqnorm(worldBankNarrowFinal$GROWTH)
+qqline(worldBankNarrowFinal$GROWTH)
+
+normality_func(4)
+qqnorm(worldBankNarrowFinal$GDP)
+qqline(worldBankNarrowFinal$GDP)
+```
+
+## Plot
+
+```{r}
+ggplot(worldBankNarrowFinal, aes(x = EDU, y = GROWTH)) + 
+  geom_point() +
+  geom_smooth(method = "lm")+ 
+  scale_x_continuous(limits = c(0,25)) +
+  labs(x = "Education Expenditure (% of Govt Expenditure)", y = "Annual Growth Rate per Capita (%)", title = "Growth Rate v. Education Expenditure")
+
+ggplot(worldBankNarrowFinal, aes(x = EDU, y = GDP)) + 
+  geom_point() +
+  geom_smooth(method = "lm") +
+  scale_x_continuous(limits = c(0,25)) +
+  scale_y_log10() +
+  labs(x = "Education Expenditure (% of Govt Expenditure)", y = "GDP per Capita (US$), log scale", title = "GDP v. Education Expenditure")
+
+ggplot(worldBankNarrowFinal, aes(x = LITERACY, y = GROWTH)) + 
+  geom_point() +
+  geom_smooth(method = "lm") +
+  scale_x_log10() +
+  labs(x = "Literacy Rate of Age +15", y = "Annual Growth Rate per Capita (%)", title = "Growth Rate v. Literacy Rate")
+
+ggplot(worldBankNarrowFinal, aes(x = LITERACY, y = GDP)) + 
+  geom_point() +
+  geom_smooth(method = "lm") + 
+  scale_y_log10() +
+  labs(x = "Literacy Rate of Age +15", y = "GDP per Capita (US$), log scale", title = "GDP v. Literacy Rate")
+```
+
+## Bivariate Model
+
+```{r}
+edu.growth <- lm(GROWTH~EDU, data = worldBankNarrowFinal, na.action = na.omit)
+edu.gdp <- lm(log(GDP)~log(EDU), data = worldBankNarrowFinal, na.action = na.omit)
+lit.growth <- lm(GROWTH~LITERACY, data = worldBankNarrowFinal, na.action = na.omit)
+lit.gdp <- lm(log(GDP)~LITERACY, data = worldBankNarrowFinal, na.action = na.omit)
+
+summary(edu.growth)
+summary(edu.gdp)
+summary(lit.growth)
+summary(lit.gdp)
+```
+
+## Multivariable Model
+
+### Fixed Effect by Income of the country (different intercept)
+
+```{r}
+worldBankNarrowFinal <- worldBankNarrowFinal %>% select(-GDP, -LITERACY)
+
+na.omit(worldBankNarrowFinal) %>% ggplot(aes(x = EDU, y = GROWTH, color = INCOME)) + 
+  scale_x_continuous(limits = c(0,25)) +
+  geom_smooth(method = "lm") +
+  labs(x = "Education Expenditure (% of Govt Expenditure)", y = "Annual Growth Rate per Capita (%)", title = "Growth Rate v. Education Expenditure")
+```
+
+### Unresdtricted Model
+
+```{r}
+library(car)
+worldBankNarrowFinal$Year <- as.numeric(worldBankNarrowFinal$Year)
+
+multi.lm <- lm(GROWTH~log(TRADE) + GOV + VOC + CPI + factor(INCOME) + EDU, data = na.omit(worldBankNarrowFinal))
+summary(multi.lm)
+
+
+## Collinearity Check1
+vif(multi.lm)
+
+## Colinearity and transformation check
+scatterplotMatrix(worldBankNarrowFinal[3:9])
+```
+
+### Restricted Model
+
+```{r}
+multi.lm2 <- lm(GROWTH ~ log(TRADE) + CPI + factor(INCOME) + EDU, data = na.omit(worldBankNarrowFinal))
+summary(multi.lm2)
+
+anova(multi.lm,multi.lm2) ## anova test shows that restricted model is better
+BIC(multi.lm)
+BIC(multi.lm2) ## model with smaller BIC value is better 
+
+## Colinearity check 2
+
+vif(multi.lm2)
+
+## Evidence of Autocorrelation
+
+library(lmtest)
+dwtest(multi.lm2, order.by = na.omit(worldBankNarrowFinal)$Year)
+bgtest(multi.lm2, order.by = na.omit(worldBankNarrowFinal)$Year)
+## both test tells us that we need adjustment for autocorrelation
+
+ggplot(multi.lm2, aes(x=na.omit(worldBankNarrowFinal)$Year, y=.resid)) + 
+  geom_jitter() +
+  geom_smooth() +
+  geom_hline(yintercept=0, col="red", linetype="dashed") +
+  labs(title = "Residual vs Year", x="Year", y = "Residuals")
+```
+
+### Auto-Correlation Adjusted Model
+
+```{r}
+library(orcutt)
+multi.orc <- cochrane.orcutt(multi.lm2)
+summary.orcutt(multi.orc)
+```
+
+\newpage
+
+```{r, include=FALSE}
+## change the numeric value in [] to choose which predictors to add in
+
+x_vars2 <- c(str_c(names(worldBankNarrow2)[c(47,67:70)]))
+
+## basically it's a double loop
+
+multiple_func <- function(y,x) {
+  outcome <- lapply(x, function(xx){
+    lapply(y, function(yy){
+      as.formula(str_c(yy, xx, sep = "~"))
+      })
+    })
+  return(outcome)
+}
+
+y_vars <- c(str_c(names(worldBankNarrow2)[c(57)]))
+
+## change "Year" to Series.Code for the dependent variable
+formulas <- sapply(y_vars, multiple_func, x=x_vars2) %>% unlist()
+```
+
+```{r, include=FALSE}
+## fitting the model
+
+# model_func <- function(myform){
+#   outcome <- lm(myform, data = worldBankNarrow2, na.action = na.omit)
+#   return(outcome)
+# }
+# 
+# lapply(lapply(formulas, model_func), summary)
+# 
+# 
+# 
+# ## store and compare the model
+# lapply(formulas, model_func) %>% stargazer(header = FALSE, no.space = TRUE, out = "Adjusted net national income (annual percent growth).htm",
+#                                                  dep.var.labels = "Adjusted net national income (annual % growth)")
+```
